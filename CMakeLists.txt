@@ -21,6 +21,8 @@ cmake_policy(SET CMP0077 NEW)
 # Let AUTOMOC and AUTOUIC process GENERATED files.
 cmake_policy(SET CMP0071 NEW)
 
+set(ENABLE_TESTS OFF CACHE BOOL "Enable OpenROAD tests")
+
 # Interfers with Qt so off by default.
 option(LINK_TIME_OPTIMIZATION "Flag to control link time optimization: off by default" OFF)
 
