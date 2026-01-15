@@ -530,6 +530,8 @@ class Resizer : public dbStaState, public dbNetworkObserver
     return estimate_parasitics_;
   }
 
+  SteinerTreeBuilder* getSteinerTreeBuilder() { return stt_builder_; }
+
   // Library analysis data
   std::unique_ptr<LibraryAnalysisData> lib_data_;
 
