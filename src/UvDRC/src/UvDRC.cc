@@ -1,16 +1,27 @@
 #include "UvDRC/UvDRC.hh"
 
 #include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <unordered_map>
+#include <vector>
 
 #include "odb/db.h"
 #include "odb/geom.h"
 #include "stt/SteinerTreeBuilder.h"
+#include "utl/Logger.h"
 
 namespace uv_drc {
 
 void UvDRCSlewBuffer::TestFunction()
 {
   std::cout << "UvDRC TestFunction called!" << std::endl;
+  std::vector<int> x = {0, 6, 4, 4};
+  std::vector<int> y = {4, 4, 6, 2};
+  stt::SteinerTreeBuilder builder{nullptr, nullptr};
+  stt::Tree tree = builder.makeSteinerTree(x, y, 0);
+  auto logger = utl::Logger{"UvDRCTestLog.txt", "UvDRCTestMetric.txt"};
+  tree.printTree(&logger);
 }
 
 // LocEqual implementation
@@ -41,8 +52,8 @@ std::tuple<LocVec, LocMap> UvDRCSlewBuffer::InitNetConnections()
   odb::dbNet* db_net = db_network->findFlatDbNet(drvr_pin_);
   auto net = db_network->dbToSta(db_net);
 
-  LocVec locs {};
-  LocMap loc_map {};
+  LocVec locs{};
+  LocMap loc_map{};
 
   auto pin_iter = network->connectedPinIterator(net);
   while (pin_iter->hasNext()) {
@@ -62,16 +73,17 @@ std::tuple<LocVec, LocMap> UvDRCSlewBuffer::InitNetConnections()
   return {locs, loc_map};
 }
 
-stt::Tree UvDRCSlewBuffer::makeSteinerTree(LocVec& locs, LocMap& loc_map)
+stt::Tree UvDRCSlewBuffer::MakeSteinerTree(LocVec& locs, LocMap& loc_map)
 {
   if (locs.size() < 2) {
-    throw std::runtime_error("At least two locations are required to build a Steiner Tree.");
+    throw std::runtime_error(
+        "At least two locations are required to build a Steiner Tree.");
   }
 
   std::vector<int> x;
   std::vector<int> y;
   std::size_t drvr_idx = 0;
-  
+
   bool is_placed = true;
   auto db_network = resizer_->getDbNetwork();
 
@@ -88,52 +100,83 @@ stt::Tree UvDRCSlewBuffer::makeSteinerTree(LocVec& locs, LocMap& loc_map)
   }
 
   if (!is_placed) {
-    throw std::runtime_error("Buffering for fixing slew can only be called after placement.");
+    throw std::runtime_error(
+        "Buffering for fixing slew can only be called after placement.");
   }
 
   return resizer_->getSteinerTreeBuilder()->makeSteinerTree(
       db_network->findFlatDbNet(drvr_pin_), x, y, drvr_idx);
 }
 
-  // TODO: impl
-  // Store a map of location to pin
-  // Build Steiner Tree
-  // Build RCTree based on Steiner Tree
-  // Prepare RCTree nodes for buffer insertion
+void UvDRCSlewBuffer::BuildRCTree(stt::Tree& tree,
+                                  LocVec& locs,
+                                  LocMap& loc_map)
+{
+  std::unordered_map<odb::Point, RCTreeNodePtr, LocHash, LocEqual>
+      loc_node_map{};
 
-  // if (pin_count >= 2) {
+  auto InitNode = [&](odb::Point loc) -> RCTreeNodePtr {
+    if (loc_node_map.find(loc) != loc_node_map.end()) {
+      return loc_node_map[loc];
+    }
 
-  //   std::vector<int> x;
-  //   std::vector<int> y;
+    RCTreeNodePtr node = nullptr;
+    auto pin_iter = loc_map.find(loc);
+    if (pin_iter != loc_map.end()) {
+      const sta::Pin* pin = pin_iter->second;
+      if (pin == drvr_pin_) {
+        node = std::make_shared<DrivNode>(loc, pin);
+        root_ = node;
+      } else {
+        node = std::make_shared<LoadNode>(loc, pin);
+      }
+    } else {
+      node = std::make_shared<JuncNode>(loc);
+    }
+    loc_node_map[loc] = node;
+    return node;
+  };
 
-  //   int drvr_idx = 0;  // The "driver_pin" or the root of the Steiner tree.
-  //   for (int i = 0; i < pin_count; i++) {
-  //     const PinLoc& pinloc = pin_locs[i];
+  // Init load, driv & junctions first
+  for (std::size_t i = 0; i != tree.branchCount(); i++) {
+    auto& branch = tree.branch[i];
+    odb::Point loc{branch.x, branch.y};
+    auto& ref_branch = tree.branch[branch.n];
+    odb::Point ref_loc{ref_branch.x, ref_branch.y};
 
-  //     if (pinloc.pin == drvr_pin_) {
-  //       drvr_idx = i;  // drvr_index is needed by flute.
-  //     }
+    auto node = InitNode(loc);
+    auto ref_node = InitNode(ref_loc);
+    if (ref_node->Type() != RCTreeNodeType::JUNCTION) {
+      auto new_ref_node = std::make_shared<JuncNode>(ref_loc);
+      loc_node_map[ref_loc] = new_ref_node;
+      if (ref_node->Type() == RCTreeNodeType::DRIVER) {
+        ref_node->AddDownstreamNode(new_ref_node);
+      } else if (ref_node->Type() == RCTreeNodeType::LOAD) {
+        new_ref_node->AddDownstreamNode(ref_node);
+      }
+    } 
+    ref_node->AddDownstreamNode(node);
+  }
+}
 
-  //     x.push_back(pinloc.loc.x());
-  //     y.push_back(pinloc.loc.y());
+void UvDRCSlewBuffer::PrepareBufferSlots()
+{
+  // TODO: IMPL
+}
 
-  //     // Track that all our pins are placed.
-  //     is_placed &= db_network->isPlaced(pinloc.pin);
+void UvDRCSlewBuffer::Run()
+{
+  if (root_ != nullptr) {
+    throw std::runtime_error("UvDRCSlewBuffer object should run once!");
+  }
 
-  //     // Flute may reorder the input points, so it takes some unravelling
-  //     // to find the mapping back to the original pins. The complication is
-  //     // that multiple pins can occupy the same location.
-  //     tree->locAddPin(pinloc.loc, pinloc.pin);
-  //   }
-  //   if (is_placed) {
-  //     stt::Tree ftree = stt_builder_->makeSteinerTree(db_net, x, y,
-  //     drvr_idx);
-
-  //     tree->setTree(ftree);
-  //     tree->createSteinerPtToPinMap();
-  //     return tree;
-  //   }
-  // }
-  // delete tree;
+  {
+    auto [locs, loc_map] = InitNetConnections();
+    stt::Tree steiner_tree = MakeSteinerTree(locs, loc_map);
+    steiner_tree.printTree(resizer_->logger());
+    BuildRCTree(steiner_tree, locs, loc_map);
+    PrepareBufferSlots();
+  }
+}
 
 }  // namespace uv_drc
