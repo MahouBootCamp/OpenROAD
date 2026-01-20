@@ -154,7 +154,7 @@ void UvDRCSlewBuffer::BuildRCTree(stt::Tree& tree,
       } else if (ref_node->Type() == RCTreeNodeType::LOAD) {
         new_ref_node->AddDownstreamNode(ref_node);
       }
-    } 
+    }
     ref_node->AddDownstreamNode(node);
   }
 }
@@ -162,6 +162,71 @@ void UvDRCSlewBuffer::BuildRCTree(stt::Tree& tree,
 void UvDRCSlewBuffer::PrepareBufferSlots()
 {
   // TODO: IMPL
+  // TODO: Calculate the H/V length between 2 minimum buffers
+  double h_length = 1.0;  // in meters
+  double v_length = 1.0;  // in meters
+
+  auto d_nodes = root_->DownstreamNodes();
+  for (auto& d_node : d_nodes) {
+    PrepareBufferSlotsHelper(root_, d_node, h_length, v_length);
+  }
+}
+
+void UvDRCSlewBuffer::PrepareBufferSlotsHelper(RCTreeNodePtr& u,
+                                               RCTreeNodePtr& d,
+                                               double h_length,
+                                               double v_length)
+{
+  auto u_loc = u->Location();
+  auto d_loc = d->Location();
+  int delta_x = std::abs(u_loc.x() - d_loc.x());
+  int delta_y = std::abs(u_loc.y() - d_loc.y());
+
+  int h_step = 0;
+  int v_step = 0;
+
+  if (delta_x == 0) {
+    v_step = resizer_->metersToDbu(v_length);
+  } else if (delta_y == 0) {
+    h_step = resizer_->metersToDbu(h_length);
+  } else {
+    double slope = static_cast<double>(delta_y) / static_cast<double>(delta_x);
+    double newHLength = (v_length * h_length) / (v_length + slope * h_length);
+    h_step = resizer_->metersToDbu(newHLength);
+    v_step = resizer_->metersToDbu(slope * newHLength);
+  }
+
+  if (delta_x > h_step && delta_y > v_step) {
+    bool is_right = (u_loc.x() > d_loc.x());
+    bool is_up = (u_loc.y() > d_loc.y());
+    RCTreeNodePtr prevWireNode = nullptr;
+    auto LocIsOK = [&](int x, int y) -> bool {
+      return (((is_right && x <= u_loc.x()) || (!is_right && x >= u_loc.x()))
+              && ((is_up && y <= u_loc.y()) || (!is_up && y >= u_loc.y())));
+    };
+    int next_x = is_right ? d_loc.x() + h_step : d_loc.x() - h_step;
+    int next_y = is_up ? d_loc.y() + v_step : d_loc.y() - v_step;
+    while (LocIsOK(next_x, next_y)) {
+      odb::Point buf_loc{next_x, next_y};
+      RCTreeNodePtr wireNode = std::make_shared<WireNode>(buf_loc);
+      if (prevWireNode != nullptr) {
+        wireNode->AddDownstreamNode(prevWireNode);
+      } else {
+        wireNode->AddDownstreamNode(d);
+      }
+      prevWireNode = wireNode;
+
+      next_x = is_right ? next_x + h_step : next_x - h_step;
+      next_y = is_up ? next_y + v_step : next_y - v_step;
+    }
+    u->RemoveDownstreamNode(d);
+    u->AddDownstreamNode(prevWireNode);
+  }
+
+  auto next_d_nodes = d->DownstreamNodes();
+  for (auto& next_d_node : next_d_nodes) {
+    PrepareBufferSlotsHelper(d, next_d_node, h_length, v_length);
+  }
 }
 
 void UvDRCSlewBuffer::Run()

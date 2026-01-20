@@ -50,6 +50,8 @@ class RCTreeNode
   virtual RCTreeNodeType Type() const = 0;
   odb::Point Location() const { return loc_; }
   virtual void AddDownstreamNode(RCTreeNodePtr ptr) = 0;
+  virtual void RemoveDownstreamNode(RCTreeNodePtr ptr) = 0;
+  virtual std::vector<RCTreeNodePtr> DownstreamNodes() = 0;
 
  private:
   odb::Point loc_;
@@ -65,6 +67,11 @@ class LoadNode : public RCTreeNode
   {
     throw std::runtime_error("LoadNode cannot have downstream nodes.");
   }
+  void RemoveDownstreamNode(RCTreeNodePtr ptr) override
+  {
+    throw std::runtime_error("LoadNode cannot have downstream nodes.");
+  }
+  std::vector<RCTreeNodePtr> DownstreamNodes() override { return {}; }
 
  private:
   const sta::Pin* pin_;
@@ -79,9 +86,22 @@ class DrivNode : public RCTreeNode
   void AddDownstreamNode(RCTreeNodePtr ptr) override
   {
     if (downstream_ != nullptr) {
-      throw std::runtime_error("Driver node can only have one downstream node.");
+      throw std::runtime_error(
+          "Driver node can only have one downstream node.");
     }
     downstream_ = ptr;
+  }
+  std::vector<RCTreeNodePtr> DownstreamNodes() override
+  {
+    return {downstream_};
+  }
+  void RemoveDownstreamNode(RCTreeNodePtr ptr) override
+  {
+    if (downstream_ != ptr) {
+      throw std::runtime_error(
+          "Remove non-matching downstream node from Driver node.");
+    }
+    downstream_ = nullptr;
   }
 
  private:
@@ -102,6 +122,18 @@ class WireNode : public RCTreeNode
     }
     downstream_ = ptr;
   }
+  std::vector<RCTreeNodePtr> DownstreamNodes() override
+  {
+    return {downstream_};
+  }
+  void RemoveDownstreamNode(RCTreeNodePtr ptr) override
+  {
+    if (downstream_ != ptr) {
+      throw std::runtime_error(
+          "Remove non-matching downstream node from Wire node.");
+    }
+    downstream_ = nullptr;
+  }
 
  private:
   RCTreeNodePtr downstream_;
@@ -116,6 +148,17 @@ class JuncNode : public RCTreeNode
   void AddDownstreamNode(RCTreeNodePtr ptr) override
   {
     children_.push_back(ptr);
+  }
+  std::vector<RCTreeNodePtr> DownstreamNodes() override { return children_; }
+  void RemoveDownstreamNode(RCTreeNodePtr ptr) override
+  {
+    if (auto itr = std::find(children_.begin(), children_.end(), ptr);
+        itr != children_.end()) {
+      throw std::runtime_error(
+          "Remove non-matching downstream node from Junc node.");
+    }
+    children_.erase(std::remove(children_.begin(), children_.end(), ptr),
+                    children_.end());
   }
 
  private:
@@ -146,6 +189,10 @@ class UvDRCSlewBuffer
   stt::Tree MakeSteinerTree(LocVec& locs, LocMap& loc_map);
   void BuildRCTree(stt::Tree& tree, LocVec& locs, LocMap& loc_map);
   void PrepareBufferSlots();
+  void PrepareBufferSlotsHelper(RCTreeNodePtr& u,
+                                RCTreeNodePtr& d,
+                                double h_length,
+                                double v_length);
 
  private:
   rsz::Resizer* resizer_;
