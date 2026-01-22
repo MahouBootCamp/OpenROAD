@@ -9,6 +9,7 @@
 
 #include "odb/db.h"
 #include "odb/geom.h"
+#include "sta/MinMax.hh"
 #include "stt/SteinerTreeBuilder.h"
 #include "utl/Logger.h"
 
@@ -134,6 +135,7 @@ stt::Tree UvDRCSlewBuffer::MakeSteinerTree(const sta::Pin* drvr_pin,
       db_network->findFlatDbNet(drvr_pin), x, y, drvr_idx);
 }
 
+// From SteinerTree to RCTree structure
 RCTreeNodePtr UvDRCSlewBuffer::BuildRCTree(const sta::Pin* drvr_pin,
                                            stt::Tree& tree,
                                            LocVec& locs,
@@ -192,43 +194,35 @@ RCTreeNodePtr UvDRCSlewBuffer::BuildRCTree(const sta::Pin* drvr_pin,
 }
 
 // TODO: IMPL
-// void UvDRCSlewBuffer::PrepareBufferSlots()
-// {
-// std::vector<BufferCandidate> buffer_candidates{};
-// for (auto& b : resizer_->buffer_fast_sizes_) {
-//   sta::LibertyPort *in, *out;
-//   b->bufferPorts(in, out);
-//   float drive_resistance = out->driveResistance();
-//   float input_cap = in->capacitance();
-//   BufferCandidate candidate{b, input_cap, drive_resistance};
-//   buffer_candidates.push_back(candidate);
-// }
+void UvDRCSlewBuffer::PrepareBufferSlots(RCTreeNodePtr root,
+                                         const sta::Corner* corner)
+{
+  auto max_wire_length = resizer_->metersToDbu(resizer_->findMaxWireLength());
+  max_wire_length
+      = std::min(max_wire_length,
+                 MaxLengthForSlew(buffer_candidates_.front().cell, corner));
+  auto buffer_step = max_wire_length / 2;
 
-// std::sort(buffer_candidates.begin(),
-//           buffer_candidates.end(),
-//           [](const BufferCandidate& a, const BufferCandidate& b) {
-//             return a.input_cap < b.input_cap;
-//           });
+  // Prepare buffer slots per max_wire_length
 
-// auto max_wire_length = resizer_->findMaxWireLength();
-// max_wire_length = std::min(max_wire_length,
-// MaxLengthForSlew(buffer_candidates.front().cell));
+}
 
-// auto d_nodes = root_->DownstreamNodes();
-// for (auto& d_node : d_nodes) {
-//   PrepareBufferSlotsHelper(root_, d_node,
-//   resizer_->metersToDbu(max_wire_length));
-// }
-// }
+// TODO: IMPL
+void UvDRCSlewBuffer::PrepareBufferSlotsHelper(RCTreeNodePtr u,
+                                               RCTreeNodePtr d,
+                                               int buffer_step)
+{
+}
 
-double UvDRCSlewBuffer::MaxLengthForSlew(sta::LibertyCell* buffer_cell)
+// Max length
+int UvDRCSlewBuffer::MaxLengthForSlew(sta::LibertyCell* buffer_cell, const sta::Corner* corner)
 {
   switch (model_) {
     case UvDRCSlewModel::Alpert: {
-      return MaxLengthForSlewAlpert(buffer_cell);
+      return MaxLengthForSlewAlpert(buffer_cell, corner);
     }
     case UvDRCSlewModel::OpenROAD: {
-      return MaxLengthForSlewOpenROAD(buffer_cell);
+      return MaxLengthForSlewOpenROAD(buffer_cell, corner);
     }
     default:
       throw std::runtime_error("Unsupported UvDRCSlewModel!");
@@ -236,19 +230,83 @@ double UvDRCSlewBuffer::MaxLengthForSlew(sta::LibertyCell* buffer_cell)
 }
 
 // TODO: Impl
-double UvDRCSlewBuffer::MaxLengthForSlewAlpert(sta::LibertyCell* buffer_cell)
+int UvDRCSlewBuffer::MaxLengthForSlewAlpert(sta::LibertyCell* buffer_cell, const sta::Corner* corner)
 {
-  // In this demo, we assume unit r,c are same on H & V directions
-  // TODO: Consider different unit r,c on H & V directions for better estimation
-  return 0.0;
+  throw std::invalid_argument("Alpert Model is not implemented yet!");
 }
 
-// TODO: Impl
-double UvDRCSlewBuffer::MaxLengthForSlewOpenROAD(sta::LibertyCell* buffer_cell)
+int UvDRCSlewBuffer::MaxLengthForSlewOpenROAD(sta::LibertyCell* buffer_cell, const sta::Corner* corner)
 {
+  // OpenROAD's RC-based slew model
+  // NOTE: the original version in Rebuffer uses Lumped RC model
+  // Here I modify it to use distributed RC model (a wire's Cap would be distributed to both ends)
+
   // In this demo, we assume unit r,c are same on H & V directions
   // TODO: Consider different unit r,c on H & V directions for better estimation
-  return 0.0;
+  sta::LibertyPort *in, *out;
+  buffer_cell->bufferPorts(in, out);
+
+  auto max_slew = resizer_->maxInputSlew(in, corner);
+  if (max_slew == sta::INF) {
+    return std::numeric_limits<int>::max();
+  } 
+  max_slew *= (1 - k_slew_margin_); // * 0.8
+
+  double unit_r, unit_c;
+  resizer_->estimate_parasitics_->wireSignalRC(corner, unit_r, unit_c);
+
+  double r_drvr = out->driveResistance();
+  double in_cap = in->capacitance();
+  double slew_rc_factor = k_openroad_slew_factor; // 1.39
+  // Solve quadratic equation to get max length
+  // 0.5 r c l^2 + (r * C_Load + R_drvr * c) l + R_drvr * C_Load = Max_Slew / Delay_Slew_Factor
+  const double a = unit_r * unit_c / 2;
+  const double b = unit_c * r_drvr + unit_r * in_cap;
+  const double c = r_drvr * in_cap - max_slew / slew_rc_factor;
+  const double d = b * b - 4 * a * c;
+  if (d < 0) {
+    resizer_->logger()->warn(
+        utl::RSZ,
+        2011,
+        "cannot determine wire length limit implied by load "
+        "slew on cell {} in corner {}",
+        buffer_cell->name(),
+        corner->name());
+    return std::numeric_limits<int>::max();
+  }
+
+  const double max_length_meters = (-b + std::sqrt(d)) / (2 * a);
+
+  if (max_length_meters > 1) {
+    // no limit
+    return std::numeric_limits<int>::max();
+  }
+
+  if (max_length_meters <= 0) {
+    resizer_->logger()->warn(
+        utl::RSZ,
+        2011,
+        "cannot determine wire length limit implied by load "
+        "slew on cell {} in corner {}",
+        buffer_cell->name(),
+        corner->name());
+    return std::numeric_limits<int>::max();
+  }
+
+  int max_length_dbu = resizer_->metersToDbu(max_length_meters);
+
+  if (max_length_dbu == 0) {
+    resizer_->logger()->warn(
+        utl::RSZ,
+        2011,
+        "cannot determine wire length limit implied by load "
+        "slew on cell {} in corner {}",
+        buffer_cell->name(),
+        corner->name());
+    return std::numeric_limits<int>::max();
+  }
+
+  return max_length_dbu;
 }
 
 // TODO: Impl

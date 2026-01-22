@@ -13,6 +13,7 @@
 #include <sta/Path.hh>
 #include <stdexcept>
 #include <unordered_map>
+#include "sta/Corner.hh"
 
 namespace uv_drc {
 
@@ -206,14 +207,17 @@ class UvDRCSlewBuffer
                             stt::Tree& tree,
                             LocVec& locs,
                             LocMap& loc_map);
-  // void PrepareBufferSlots();
-  // void PrepareBufferSlotsHelper(RCTreeNodePtr& u,
-  //                               RCTreeNodePtr& d,
-  //                               int max_length);
+  void PrepareBufferSlots(RCTreeNodePtr root, const sta::Corner* corner);
+  void PrepareBufferSlotsHelper(RCTreeNodePtr u,
+                                RCTreeNodePtr d,
+                                int buffer_step);
 
-  double MaxLengthForSlew(sta::LibertyCell* buffer_cell);
-  double MaxLengthForSlewAlpert(sta::LibertyCell* buffer_cell);
-  double MaxLengthForSlewOpenROAD(sta::LibertyCell* buffer_cell);
+  int MaxLengthForSlew(sta::LibertyCell* buffer_cell,
+                          const sta::Corner* corner);
+  int MaxLengthForSlewAlpert(sta::LibertyCell* buffer_cell,
+                                const sta::Corner* corner);
+  int MaxLengthForSlewOpenROAD(sta::LibertyCell* buffer_cell,
+                                  const sta::Corner* corner);
 
  private:
   rsz::Resizer* resizer_;
@@ -224,6 +228,9 @@ class UvDRCSlewBuffer
 
   std::vector<BufferCandidate> buffer_candidates_;
   // RCTreeNodePtr root_ = nullptr;
+
+  static constexpr float k_slew_margin_ = 0.2f;  // 20%
+  static constexpr float k_openroad_slew_factor = 1.39;
 };
 
 }  // namespace uv_drc
