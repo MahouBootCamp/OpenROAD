@@ -30,6 +30,7 @@ add_library(rsz_lib
     Resizer.cc
     OdbCallBack.cc
     ConcreteSwapArithModules.cc
+    UvDRC/UvDRC.cc
 )
 
 target_sources(rsz

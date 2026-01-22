@@ -35,6 +35,10 @@ namespace sta {
 class SpefWriter;
 }
 
+namespace uv_drc {
+class UvDRCSlewBuffer;
+}
+
 namespace rsz {
 
 using utl::Logger;
@@ -938,6 +942,7 @@ class Resizer : public dbStaState, public dbNetworkObserver
   friend class ConcreteSwapArithModules;
   friend class Rebuffer;
   friend class OdbCallBack;
+  friend class uv_drc::UvDRCSlewBuffer;
 };
 
 }  // namespace rsz

@@ -285,7 +285,6 @@ add_subdirectory(dft)
 add_subdirectory(mpl)
 add_subdirectory(par)
 add_subdirectory(est)
-add_subdirectory(UvDRC)
 
 ################################################################
 
@@ -356,7 +355,6 @@ target_link_libraries(openroad
   mpl
   par
   est
-  UvDRCLib
   ${ABC_LIBRARY}
   ${TCL_LIBRARY}
   ${CMAKE_THREAD_LIBS_INIT}

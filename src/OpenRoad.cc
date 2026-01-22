@@ -90,6 +90,7 @@
 #include "utl/Progress.h"
 #include "utl/ScopedTemporaryFile.h"
 #include "utl/decode.h"
+#include "UvDRC/UvDRC.hh"
 
 namespace ord {
 extern const char* ord_tcl_inits[];
@@ -149,6 +150,7 @@ OpenRoad::~OpenRoad()
   delete logger_;
   delete verilog_reader_;
   delete callback_handler_;
+  delete uv_drc_slew_buffer_;
 }
 
 sta::dbNetwork* OpenRoad::getDbNetwork()
@@ -249,6 +251,8 @@ void OpenRoad::init(Tcl_Interp* tcl_interp,
   icewall_ = new pad::ICeWall(db_, logger_);
   dft_ = new dft::Dft(db_, sta_, logger_);
   example_ = new exa::Example(db_, logger_);
+  uv_drc_slew_buffer_ = new uv_drc::UvDRCSlewBuffer(resizer_);
+  uv_drc_slew_buffer_->TestFunction();
 
   // Init components.
   Ord_Init(tcl_interp);

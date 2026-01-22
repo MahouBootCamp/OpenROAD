@@ -1,9 +1,11 @@
 #ifndef UV_DRC_HH
 #define UV_DRC_HH
 
+#include <odb/geom.h>
 #include <stt/SteinerTreeBuilder.h>
 
 #include <cstddef>
+#include <db_sta/dbSta.hh>
 #include <memory>
 #include <rsz/Resizer.hh>
 #include <sta/Delay.hh>
@@ -11,9 +13,6 @@
 #include <sta/Path.hh>
 #include <stdexcept>
 #include <unordered_map>
-
-#include "db_sta/dbSta.hh"
-#include "odb/geom.h"
 
 namespace uv_drc {
 
@@ -30,6 +29,16 @@ class LocHash
 
  private:
   std::size_t HashCombine(std::size_t seed, std::size_t value) const;
+};
+
+using LocMap
+    = std::unordered_map<odb::Point, const sta::Pin*, LocHash, LocEqual>;
+using LocVec = std::vector<odb::Point>;
+
+enum class UvDRCSlewModel
+{
+  Alpert,
+  OpenROAD
 };
 
 class RCTreeNode;
@@ -165,41 +174,56 @@ class JuncNode : public RCTreeNode
   std::vector<RCTreeNodePtr> children_;
 };
 
-using LocMap
-    = std::unordered_map<odb::Point, const sta::Pin*, LocHash, LocEqual>;
-using LocVec = std::vector<odb::Point>;
-
 // UvDRCSlewBuffer targets to fix slew violations by inserting buffers.
 class UvDRCSlewBuffer
 {
  public:
   UvDRCSlewBuffer(rsz::Resizer* resizer,
-                  const sta::Pin* pin,
-                  const sta::Corner* corner,
-                  int max_cap)
-      : resizer_(resizer), drvr_pin_(pin), corner_(corner), max_cap_(max_cap)
+                  UvDRCSlewModel model = UvDRCSlewModel::OpenROAD)
+      : resizer_(resizer), model_(model)
   {
   }
   ~UvDRCSlewBuffer() = default;
   void TestFunction();
-  void Run();
+  void Run(const sta::Pin* drvr_pin, const sta::Corner* corner, int max_cap);
 
  private:
-  std::tuple<LocVec, LocMap> InitNetConnections();
-  stt::Tree MakeSteinerTree(LocVec& locs, LocMap& loc_map);
-  void BuildRCTree(stt::Tree& tree, LocVec& locs, LocMap& loc_map);
-  void PrepareBufferSlots();
-  void PrepareBufferSlotsHelper(RCTreeNodePtr& u,
-                                RCTreeNodePtr& d,
-                                double h_length,
-                                double v_length);
+  struct BufferCandidate
+  {
+    sta::LibertyCell* cell;
+    float input_cap;
+    float drive_resistance;
+  };
+
+ private:
+  void InitBufferCandidates();
+
+  std::tuple<LocVec, LocMap> InitNetConnections(const sta::Pin* drvr_pin);
+  stt::Tree MakeSteinerTree(const sta::Pin* drvr_pin,
+                            LocVec& locs,
+                            LocMap& loc_map);
+  RCTreeNodePtr BuildRCTree(const sta::Pin* drvr_pin,
+                            stt::Tree& tree,
+                            LocVec& locs,
+                            LocMap& loc_map);
+  // void PrepareBufferSlots();
+  // void PrepareBufferSlotsHelper(RCTreeNodePtr& u,
+  //                               RCTreeNodePtr& d,
+  //                               int max_length);
+
+  double MaxLengthForSlew(sta::LibertyCell* buffer_cell);
+  double MaxLengthForSlewAlpert(sta::LibertyCell* buffer_cell);
+  double MaxLengthForSlewOpenROAD(sta::LibertyCell* buffer_cell);
 
  private:
   rsz::Resizer* resizer_;
-  const sta::Pin* drvr_pin_;
-  const sta::Corner* corner_;
-  int max_cap_;
-  RCTreeNodePtr root_ = nullptr;
+  // const sta::Pin* drvr_pin_;
+  // const sta::Corner* corner_;
+  // int max_cap_;
+  UvDRCSlewModel model_;
+
+  std::vector<BufferCandidate> buffer_candidates_;
+  // RCTreeNodePtr root_ = nullptr;
 };
 
 }  // namespace uv_drc

@@ -7,6 +7,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "UvDRC/UvDRC.hh"
 
 extern "C" {
 struct Tcl_Interp;
@@ -126,6 +127,10 @@ class Dft;
 
 namespace est {
 class EstimateParasitics;
+}
+
+namespace uv_drc {
+class UvDRCSlewBuffer;
 }
 
 namespace ord {
@@ -285,6 +290,7 @@ class OpenRoad
   dft::Dft* dft_ = nullptr;
   est::EstimateParasitics* estimate_parasitics_ = nullptr;
   utl::CallBackHandler* callback_handler_ = nullptr;
+  uv_drc::UvDRCSlewBuffer* uv_drc_slew_buffer_ = nullptr;
 
   int threads_ = 1;
 

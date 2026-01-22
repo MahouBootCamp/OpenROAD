@@ -42,7 +42,6 @@
 #include "sta/StringUtil.hh"
 #include "utl/Logger.h"
 #include "utl/decode.h"
-#include "UvDRC/UvDRC.hh"
 
 using sta::findCmdLineFlag;
 using sta::findCmdLineKey;
@@ -212,12 +211,6 @@ int main(int argc, char* argv[])
       setenv("LC_ALL", locale, /* override */ 1);
       break;
     }
-  }
-
-  // TODO: Delete after testing
-  {
-    uv_drc::UvDRCSlewBuffer test_buffer(nullptr, nullptr, nullptr, 0);
-    test_buffer.TestFunction();
   }
 
   // Generate a stacktrace on crash
