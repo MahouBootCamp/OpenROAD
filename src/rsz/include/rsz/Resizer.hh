@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -808,6 +809,7 @@ class Resizer : public dbStaState, public dbNetworkObserver
   std::unique_ptr<RepairHold> repair_hold_;
   std::unique_ptr<ConcreteSwapArithModules> swap_arith_modules_;
   std::unique_ptr<Rebuffer> rebuffer_;
+  std::unique_ptr<uv_drc::UvDRCSlewBuffer> uv_drc_slew_buffer_;
 
   // Layer RC per wire length indexed by layer->getNumber(), corner->index
   LibertyCellSet dont_use_;

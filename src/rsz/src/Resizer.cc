@@ -83,6 +83,7 @@
 #include "utl/Logger.h"
 #include "utl/algorithms.h"
 #include "utl/scope.h"
+#include "UvDRC/UvDRC.hh"
 
 // http://vlsicad.eecs.umich.edu/BK/Slots/cache/dropzone.tamu.edu/~zhuoli/GSRC/fast_buffer_insertion.html
 
@@ -189,6 +190,8 @@ Resizer::Resizer(Logger* logger,
   repair_setup_ = std::make_unique<RepairSetup>(this);
   repair_hold_ = std::make_unique<RepairHold>(this);
   rebuffer_ = std::make_unique<Rebuffer>(this);
+  uv_drc_slew_buffer_ = std::make_unique<uv_drc::UvDRCSlewBuffer>(this);
+  uv_drc_slew_buffer_->TestFunction();
 }
 
 Resizer::~Resizer() = default;

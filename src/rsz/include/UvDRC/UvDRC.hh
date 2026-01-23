@@ -13,6 +13,7 @@
 #include <sta/Path.hh>
 #include <stdexcept>
 #include <unordered_map>
+
 #include "sta/Corner.hh"
 
 namespace uv_drc {
@@ -213,11 +214,12 @@ class UvDRCSlewBuffer
                                 int buffer_step);
 
   int MaxLengthForSlew(sta::LibertyCell* buffer_cell,
-                          const sta::Corner* corner);
+                       const sta::Corner* corner);
   int MaxLengthForSlewAlpert(sta::LibertyCell* buffer_cell,
-                                const sta::Corner* corner);
+                             const sta::Corner* corner);
   int MaxLengthForSlewOpenROAD(sta::LibertyCell* buffer_cell,
-                                  const sta::Corner* corner);
+                               const sta::Corner* corner);
+  int MaxLengthForCap(sta::LibertyCell* buffer_cell, const sta::Corner* corner);
 
  private:
   rsz::Resizer* resizer_;
@@ -230,6 +232,7 @@ class UvDRCSlewBuffer
   // RCTreeNodePtr root_ = nullptr;
 
   static constexpr float k_slew_margin_ = 0.2f;  // 20%
+  static constexpr float k_cap_margin_ = 0.2f;   // 20%
   static constexpr float k_openroad_slew_factor = 1.39;
 };
 
