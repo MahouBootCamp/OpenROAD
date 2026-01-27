@@ -191,7 +191,6 @@ Resizer::Resizer(Logger* logger,
   repair_hold_ = std::make_unique<RepairHold>(this);
   rebuffer_ = std::make_unique<Rebuffer>(this);
   uv_drc_slew_buffer_ = std::make_unique<uv_drc::UvDRCSlewBuffer>(this);
-  uv_drc_slew_buffer_->TestFunction();
 }
 
 Resizer::~Resizer() = default;

@@ -128,10 +128,6 @@ namespace est {
 class EstimateParasitics;
 }
 
-namespace uv_drc {
-class UvDRCSlewBuffer;
-}
-
 namespace ord {
 
 class dbVerilogNetwork;

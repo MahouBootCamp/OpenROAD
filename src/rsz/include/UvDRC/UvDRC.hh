@@ -50,15 +50,16 @@ enum class RCTreeNodeType
   LOAD,
   WIRE,
   JUNCTION,
-  DRIVER
+  DRIVER,
+  NONE
 };
 
 class RCTreeNode
 {
  public:
-  RCTreeNode(odb::Point loc) : loc_(loc) {}
+  RCTreeNode(odb::Point loc, RCTreeNodeType type) : loc_(loc), type_(type) {}
   virtual ~RCTreeNode() = default;
-  virtual RCTreeNodeType Type() const = 0;
+  RCTreeNodeType Type() { return type_; }
   odb::Point Location() const { return loc_; }
   virtual void AddDownstreamNode(RCTreeNodePtr ptr) = 0;
   virtual void RemoveDownstreamNode(RCTreeNodePtr ptr) = 0;
@@ -66,14 +67,17 @@ class RCTreeNode
 
  private:
   odb::Point loc_;
+  RCTreeNodeType type_;
 };
 
 class LoadNode : public RCTreeNode
 {
  public:
-  LoadNode(odb::Point loc, const sta::Pin* pin) : RCTreeNode(loc), pin_(pin) {}
+  LoadNode(odb::Point loc, const sta::Pin* pin)
+      : RCTreeNode(loc, RCTreeNodeType::LOAD), pin_(pin)
+  {
+  }
   ~LoadNode() override = default;
-  RCTreeNodeType Type() const override { return RCTreeNodeType::LOAD; }
   void AddDownstreamNode(RCTreeNodePtr ptr) override
   {
     throw std::runtime_error("LoadNode cannot have downstream nodes.");
@@ -91,9 +95,11 @@ class LoadNode : public RCTreeNode
 class DrivNode : public RCTreeNode
 {
  public:
-  DrivNode(odb::Point loc, const sta::Pin* pin) : RCTreeNode(loc), pin_(pin) {}
+  DrivNode(odb::Point loc, const sta::Pin* pin)
+      : RCTreeNode(loc, RCTreeNodeType::DRIVER), pin_(pin)
+  {
+  }
   ~DrivNode() override = default;
-  RCTreeNodeType Type() const override { return RCTreeNodeType::DRIVER; }
   void AddDownstreamNode(RCTreeNodePtr ptr) override
   {
     if (downstream_ != nullptr) {
@@ -123,9 +129,8 @@ class DrivNode : public RCTreeNode
 class WireNode : public RCTreeNode
 {
  public:
-  WireNode(odb::Point loc) : RCTreeNode(loc) {}
+  WireNode(odb::Point loc) : RCTreeNode(loc, RCTreeNodeType::WIRE) {}
   ~WireNode() override = default;
-  RCTreeNodeType Type() const override { return RCTreeNodeType::WIRE; }
   void AddDownstreamNode(RCTreeNodePtr ptr) override
   {
     if (downstream_ != nullptr) {
@@ -153,9 +158,8 @@ class WireNode : public RCTreeNode
 class JuncNode : public RCTreeNode
 {
  public:
-  JuncNode(odb::Point loc) : RCTreeNode(loc) {}
+  JuncNode(odb::Point loc) : RCTreeNode(loc, RCTreeNodeType::JUNCTION) {}
   ~JuncNode() override = default;
-  RCTreeNodeType Type() const override { return RCTreeNodeType::JUNCTION; }
   void AddDownstreamNode(RCTreeNodePtr ptr) override
   {
     children_.push_back(ptr);
@@ -186,7 +190,6 @@ class UvDRCSlewBuffer
   {
   }
   ~UvDRCSlewBuffer() = default;
-  void TestFunction();
   void Run(const sta::Pin* drvr_pin, const sta::Corner* corner, int max_cap);
 
  private:

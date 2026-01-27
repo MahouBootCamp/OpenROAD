@@ -1,7 +1,6 @@
 #include "UvDRC/UvDRC.hh"
 
 #include <algorithm>
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
@@ -14,17 +13,6 @@
 #include "utl/Logger.h"
 
 namespace uv_drc {
-
-void UvDRCSlewBuffer::TestFunction()
-{
-  std::cout << "UvDRC TestFunction called!" << std::endl;
-  std::vector<int> x = {0, 6, 4, 4};
-  std::vector<int> y = {4, 4, 6, 2};
-  stt::SteinerTreeBuilder builder{nullptr, nullptr};
-  stt::Tree tree = builder.makeSteinerTree(x, y, 0);
-  auto logger = utl::Logger{"UvDRCTestLog.txt", "UvDRCTestMetric.txt"};
-  tree.printTree(&logger);
-}
 
 // LocEqual implementation
 bool LocEqual::operator()(const odb::Point& loc1, const odb::Point& loc2) const
@@ -141,6 +129,7 @@ RCTreeNodePtr UvDRCSlewBuffer::BuildRCTree(const sta::Pin* drvr_pin,
                                            LocVec& locs,
                                            LocMap& loc_map)
 {
+  // TODO: There can be sinks at same location, need to handle that case
   std::unordered_map<odb::Point, RCTreeNodePtr, LocHash, LocEqual>
       loc_node_map{};
   RCTreeNodePtr root = nullptr;
@@ -186,6 +175,7 @@ RCTreeNodePtr UvDRCSlewBuffer::BuildRCTree(const sta::Pin* drvr_pin,
       } else if (ref_node->Type() == RCTreeNodeType::LOAD) {
         new_ref_node->AddDownstreamNode(ref_node);
       }
+      ref_node = new_ref_node;
     }
     ref_node->AddDownstreamNode(node);
   }
@@ -436,7 +426,7 @@ void UvDRCSlewBuffer::Run(const sta::Pin* drvr_pin,
   {
     auto [locs, loc_map] = InitNetConnections(drvr_pin);
     auto steiner_tree = MakeSteinerTree(drvr_pin, locs, loc_map);
-    steiner_tree.printTree(resizer_->logger());
+    // steiner_tree.printTree(resizer_->logger());
     auto rc_tree = BuildRCTree(drvr_pin, steiner_tree, locs, loc_map);
     PrepareBufferSlots(rc_tree, corner);
   }

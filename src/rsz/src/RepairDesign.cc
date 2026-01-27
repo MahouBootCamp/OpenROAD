@@ -51,6 +51,7 @@
 #include "utl/Logger.h"
 #include "utl/mem_stats.h"
 #include "utl/scope.h"
+#include "UvDRC/UvDRC.hh"
 
 namespace rsz {
 
@@ -1178,6 +1179,7 @@ void RepairDesign::repairNet(Net* net,
 
     // For tristate nets all we can do is resize the driver.
     if (!resizer_->isTristateDriver(drvr_pin)) {
+      resizer_->uv_drc_slew_buffer_->Run(drvr_pin, corner, max_cap);
       BufferedNetPtr bnet = resizer_->makeBufferedNet(drvr_pin, corner);
 
       if (!bnet) {
