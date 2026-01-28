@@ -65,6 +65,7 @@ class RCTreeNode
   virtual void AddDownstreamNode(RCTreeNodePtr ptr) = 0;
   virtual void RemoveDownstreamNode(RCTreeNodePtr ptr) = 0;
   virtual std::vector<RCTreeNodePtr> DownstreamNodes() = 0;
+  virtual std::size_t DownstreamNodeCount() = 0;
 
   void DebugPrint(int indent, utl::Logger* logger);
 
@@ -90,6 +91,7 @@ class LoadNode : public RCTreeNode
     throw std::runtime_error("LoadNode cannot have downstream nodes.");
   }
   std::vector<RCTreeNodePtr> DownstreamNodes() override { return {}; }
+  std::size_t DownstreamNodeCount() override { return 0; }
 
  private:
   const sta::Pin* pin_;
@@ -123,6 +125,7 @@ class DrivNode : public RCTreeNode
     }
     downstream_ = nullptr;
   }
+  std::size_t DownstreamNodeCount() override { return downstream_ == nullptr ? 0 : 1; }
 
  private:
   const sta::Pin* pin_;
@@ -153,6 +156,7 @@ class WireNode : public RCTreeNode
     }
     downstream_ = nullptr;
   }
+  std::size_t DownstreamNodeCount() override { return downstream_ == nullptr ? 0 : 1; }
 
  private:
   RCTreeNodePtr downstream_;
@@ -165,22 +169,44 @@ class JuncNode : public RCTreeNode
   ~JuncNode() override = default;
   void AddDownstreamNode(RCTreeNodePtr ptr) override
   {
-    children_.push_back(ptr);
+    if (downstream1_ == nullptr) {
+      downstream1_ = ptr;
+    } else if (downstream2_ == nullptr) {
+      downstream2_ = ptr;
+    } else {
+      throw std::runtime_error("Junc node can only have two downstream nodes.");
+    }
   }
-  std::vector<RCTreeNodePtr> DownstreamNodes() override { return children_; }
+  std::vector<RCTreeNodePtr> DownstreamNodes() override
+  {
+    return {downstream1_, downstream2_};
+  }
   void RemoveDownstreamNode(RCTreeNodePtr ptr) override
   {
-    if (auto itr = std::find(children_.begin(), children_.end(), ptr);
-        itr != children_.end()) {
+    if (downstream1_ == ptr) {
+      downstream1_ = nullptr;
+    } else if (downstream2_ == ptr) {
+      downstream2_ = nullptr;
+    } else {
       throw std::runtime_error(
           "Remove non-matching downstream node from Junc node.");
     }
-    children_.erase(std::remove(children_.begin(), children_.end(), ptr),
-                    children_.end());
+  }
+  std::size_t DownstreamNodeCount() override
+  {
+    std::size_t count = 0;
+    if (downstream1_ != nullptr) {
+      count++;
+    }
+    if (downstream2_ != nullptr) {
+      count++;
+    }
+    return count;
   }
 
  private:
-  std::vector<RCTreeNodePtr> children_;
+  RCTreeNodePtr downstream1_;
+  RCTreeNodePtr downstream2_;
 };
 
 // UvDRCSlewBuffer targets to fix slew violations by inserting buffers.
@@ -204,6 +230,7 @@ class UvDRCSlewBuffer
   };
 
  private:
+  void TestFunction();
   void InitBufferCandidates();
 
   std::tuple<LocVec, PinVec> InitNetConnections(const sta::Pin* drvr_pin);
@@ -214,6 +241,11 @@ class UvDRCSlewBuffer
                             stt::Tree& tree,
                             LocVec& locs,
                             PinVec& pins);
+  RCTreeNodePtr BuildRCTreeHelper (
+    std::vector<RCTreeNodePtr>& nodes,
+    std::vector<std::vector<std::size_t>>& adjacents,
+    std::size_t current_index
+  );
   void PrepareBufferSlots(RCTreeNodePtr root, const sta::Corner* corner);
   void PrepareBufferSlotsHelper(RCTreeNodePtr u,
                                 RCTreeNodePtr d,

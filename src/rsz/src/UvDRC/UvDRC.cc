@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <queue>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -159,46 +161,103 @@ RCTreeNodePtr UvDRCSlewBuffer::BuildRCTree(const sta::Pin* drvr_pin,
                                            LocVec& locs,
                                            PinVec& pins)
 {
-  std::size_t pin_count = static_cast<std::size_t>(tree.deg);
-  std::vector<RCTreeNodePtr> pin_nodes{};
-  pin_nodes.push_back(
-      std::make_shared<DrivNode>(locs[0], drvr_pin));  // Driver node
-  for (std::size_t i = 1; i != pin_count; i++) {
-    pin_nodes.push_back(
-        std::make_shared<LoadNode>(locs[i], pins[i]));  // Driver node
+  if (locs.size() != tree.deg) {
+    throw std::runtime_error(
+        "Pins count does not match the Steiner Tree degree.");
   }
+  std::size_t pin_count = pins.size();
+  RCTreeNodePtr root = nullptr;
   std::unordered_map<odb::Point, RCTreeNodePtr, LocHash, LocEqual>
-      junc_node_map{};
+      loc_node_map{};
 
-  auto GetOrInitJuncNode = [&](odb::Point loc) -> RCTreeNodePtr {
-    auto itr = junc_node_map.find(loc);
-    if (itr == junc_node_map.end()) {
-      RCTreeNodePtr node = std::make_shared<JuncNode>(loc);
-      junc_node_map[loc] = node;
-      return node;
-    }
-    return itr->second;
-  };
+  std::vector<RCTreeNodePtr> nodes;
+  std::vector<std::vector<std::size_t>> adjacents(tree.branchCount(),
+                                                  std::vector<std::size_t>{});
 
   for (std::size_t i = 0; i != tree.branchCount(); i++) {
-    auto& branch = tree.branch[i];
-    auto node = GetOrInitJuncNode(odb::Point(branch.x, branch.y));
-    if (i < pin_count) {
-      if (i == 0) {
-        pin_nodes[i]->AddDownstreamNode(node);
-      } else {
-        node->AddDownstreamNode(pin_nodes[i]);
-      }
+    if (i == 0) {
+      root = std::make_shared<DrivNode>(locs[i], drvr_pin);
+      nodes.push_back(root);
+      continue;  // No need to check adjs for root
     }
-    if (i == 0) continue;
-    auto parent_branch = tree.branch[branch.n];
-    odb::Point parent_loc{parent_branch.x, parent_branch.y};
-    RCTreeNodePtr parent_node = GetOrInitJuncNode(parent_loc);
-    parent_node->AddDownstreamNode(node);
+
+    RCTreeNodePtr node = nullptr;
+    if (i < pin_count) {
+      node = std::make_shared<LoadNode>(locs[i], pins[i]);
+    } else {
+      node = std::make_shared<JuncNode>(
+          odb::Point{tree.branch[i].x, tree.branch[i].y});
+    }
+    nodes.push_back(node);
+    adjacents[tree.branch[i].n].push_back(i);
   }
 
-  pin_nodes[0]->DebugPrint(0, resizer_->logger());
-  return pin_nodes[0];
+  BuildRCTreeHelper(nodes, adjacents, 0);
+  root->DebugPrint(0, resizer_->logger());
+  return root;
+}
+
+RCTreeNodePtr UvDRCSlewBuffer::BuildRCTreeHelper(
+    std::vector<RCTreeNodePtr>& nodes,
+    std::vector<std::vector<std::size_t>>& adjacents,
+    std::size_t current_index)
+{
+  RCTreeNodePtr current_node = nodes[current_index];
+  auto& children = adjacents[current_index];
+  if (children.size() > 2) {
+    throw std::runtime_error(
+        "RCTreeNode cannot have more than two downstream nodes.");
+  }
+  if (children.empty()) {
+    return current_node;
+  }
+
+  if (current_node->Type() == RCTreeNodeType::LOAD) {
+    if (children.size() == 1) {
+      auto new_node = std::make_shared<JuncNode>(current_node->Location());
+      new_node->AddDownstreamNode(current_node);
+      new_node->AddDownstreamNode(
+          BuildRCTreeHelper(nodes, adjacents, children[0]));
+      return new_node;
+    }
+
+    if (children.size() == 2) {
+      auto new_node = std::make_shared<JuncNode>(current_node->Location());
+      auto new_node2 = std::make_shared<JuncNode>(current_node->Location());
+      new_node->AddDownstreamNode(current_node);
+      new_node->AddDownstreamNode(new_node2);
+      new_node2->AddDownstreamNode(
+          BuildRCTreeHelper(nodes, adjacents, children[0]));
+      new_node2->AddDownstreamNode(
+          BuildRCTreeHelper(nodes, adjacents, children[1]));
+      return new_node;
+    }
+  }
+
+  if (current_node->Type() == RCTreeNodeType::DRIVER) {
+    if (children.size() == 2) {
+      auto new_node = std::make_shared<JuncNode>(current_node->Location());
+      current_node->AddDownstreamNode(new_node);
+      new_node->AddDownstreamNode(
+          BuildRCTreeHelper(nodes, adjacents, children[0]));
+      new_node->AddDownstreamNode(
+          BuildRCTreeHelper(nodes, adjacents, children[1]));
+      return current_node;
+    }
+    if (children.size() == 1) {
+      current_node->AddDownstreamNode(
+          BuildRCTreeHelper(nodes, adjacents, children[0]));
+      return current_node;
+    }
+    throw std::runtime_error(
+        "Driver node must have at least one downstream node.");
+  }
+
+  for (auto& n_index : children) {
+    RCTreeNodePtr child_node = BuildRCTreeHelper(nodes, adjacents, n_index);
+    current_node->AddDownstreamNode(child_node);
+  }
+  return current_node;
 }
 
 // TODO: IMPL
@@ -381,67 +440,13 @@ int UvDRCSlewBuffer::MaxLengthForCap(sta::LibertyCell* buffer_cell,
   return std::numeric_limits<int>::max();
 }
 
-// TODO: Impl
-// void UvDRCSlewBuffer::PrepareBufferSlotsHelper(RCTreeNodePtr& u,
-// RCTreeNodePtr& d,
-// int max_length)
-// {
-// auto u_loc = u->Location();
-// auto d_loc = d->Location();
-// int delta_x = std::abs(u_loc.x() - d_loc.x());
-// int delta_y = std::abs(u_loc.y() - d_loc.y());
-
-// int h_step = 0;
-// int v_step = 0;
-
-// if (delta_x == 0) {
-//   v_step = resizer_->metersToDbu(v_length);
-// } else if (delta_y == 0) {
-//   h_step = resizer_->metersToDbu(h_length);
-// } else {
-//   double slope = static_cast<double>(delta_y) / static_cast<double>(delta_x);
-//   double newHLength = (v_length * h_length) / (v_length + slope * h_length);
-//   h_step = resizer_->metersToDbu(newHLength);
-//   v_step = resizer_->metersToDbu(slope * newHLength);
-// }
-
-// if (delta_x > h_step && delta_y > v_step) {
-//   bool is_right = (u_loc.x() > d_loc.x());
-//   bool is_up = (u_loc.y() > d_loc.y());
-//   RCTreeNodePtr prevWireNode = nullptr;
-//   auto LocIsOK = [&](int x, int y) -> bool {
-//     return (((is_right && x <= u_loc.x()) || (!is_right && x >= u_loc.x()))
-//             && ((is_up && y <= u_loc.y()) || (!is_up && y >= u_loc.y())));
-//   };
-//   int next_x = is_right ? d_loc.x() + h_step : d_loc.x() - h_step;
-//   int next_y = is_up ? d_loc.y() + v_step : d_loc.y() - v_step;
-//   while (LocIsOK(next_x, next_y)) {
-//     odb::Point buf_loc{next_x, next_y};
-//     RCTreeNodePtr wireNode = std::make_shared<WireNode>(buf_loc);
-//     if (prevWireNode != nullptr) {
-//       wireNode->AddDownstreamNode(prevWireNode);
-//     } else {
-//       wireNode->AddDownstreamNode(d);
-//     }
-//     prevWireNode = wireNode;
-
-//     next_x = is_right ? next_x + h_step : next_x - h_step;
-//     next_y = is_up ? next_y + v_step : next_y - v_step;
-//   }
-//   u->RemoveDownstreamNode(d);
-//   u->AddDownstreamNode(prevWireNode);
-// }
-
-// auto next_d_nodes = d->DownstreamNodes();
-// for (auto& next_d_node : next_d_nodes) {
-//   PrepareBufferSlotsHelper(d, next_d_node, h_length, v_length);
-// }
-// }
-
 void UvDRCSlewBuffer::Run(const sta::Pin* drvr_pin,
                           const sta::Corner* corner,
                           int max_cap)
 {
+  // TODO: DELETE THIS
+  TestFunction();
+
   InitBufferCandidates();
 
   {
@@ -454,6 +459,16 @@ void UvDRCSlewBuffer::Run(const sta::Pin* drvr_pin,
 
     PrepareBufferSlots(rc_tree, corner);
   }
+}
+
+void UvDRCSlewBuffer::TestFunction()
+{
+  resizer_->logger()->report("UvDRCSlewBuffer TestFunction called.");
+  // std::vector<int> x = {0, 6, 4, 4};
+  // std::vector<int> y = {4, 4, 6, 2};
+  // stt::SteinerTreeBuilder builder{nullptr, nullptr};
+  // stt::Tree tree = builder.makeSteinerTree(x, y, 0);
+  // tree.printTree(resizer_->logger());
 }
 
 }  // namespace uv_drc
