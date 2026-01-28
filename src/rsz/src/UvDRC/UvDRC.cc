@@ -1,7 +1,9 @@
 #include "UvDRC/UvDRC.hh"
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -34,6 +36,38 @@ std::size_t LocHash::HashCombine(std::size_t seed, std::size_t value) const
   return seed ^ (value + 0x9e3779b9 + (seed << 6) + (seed >> 2));
 }
 
+void RCTreeNode::DebugPrint(int indent, utl::Logger* logger)
+{
+  std::stringstream os;
+  {
+    std::string indent_str(indent, ' ');
+    os << "Node Type: " << indent_str;
+  }
+  switch (type_) {
+    case RCTreeNodeType::LOAD:
+      os << "LOAD";
+      break;
+    case RCTreeNodeType::WIRE:
+      os << "WIRE";
+      break;
+    case RCTreeNodeType::JUNCTION:
+      os << "JUNCTION";
+      break;
+    case RCTreeNodeType::DRIVER:
+      os << "DRIVER";
+      break;
+    default:
+      os << "NONE";
+      break;
+  }
+  os << ", Location: (" << loc_.x() << ", " << loc_.y() << ")";
+  logger->report(os.str());
+  auto d_nodes = DownstreamNodes();
+  for (const auto& d : d_nodes) {
+    d->DebugPrint(indent + 2, logger);
+  }
+}
+
 void UvDRCSlewBuffer::InitBufferCandidates()
 {
   if (!buffer_candidates_.empty()) {
@@ -56,7 +90,7 @@ void UvDRCSlewBuffer::InitBufferCandidates()
             });
 }
 
-std::tuple<LocVec, LocMap> UvDRCSlewBuffer::InitNetConnections(
+std::tuple<LocVec, PinVec> UvDRCSlewBuffer::InitNetConnections(
     const sta::Pin* drvr_pin)
 {
   auto network = resizer_->network();
@@ -66,7 +100,9 @@ std::tuple<LocVec, LocMap> UvDRCSlewBuffer::InitNetConnections(
   auto net = db_network->dbToSta(db_net);
 
   LocVec locs{};
-  LocMap loc_map{};
+  PinVec pins{};
+  locs.push_back(db_network->location(drvr_pin));
+  pins.push_back(drvr_pin);
 
   auto pin_iter = network->connectedPinIterator(net);
   while (pin_iter->hasNext()) {
@@ -75,20 +111,20 @@ std::tuple<LocVec, LocMap> UvDRCSlewBuffer::InitNetConnections(
     odb::dbBTerm* bterm;
     odb::dbModITerm* mod_iterm;
     db_network->staToDb(pin, iterm, bterm, mod_iterm);
-    if (iterm || bterm) {
+    if ((iterm || bterm) && pin != drvr_pin) {
       odb::Point loc = db_network->location(pin);
       locs.push_back(loc);
-      loc_map[loc] = pin;
+      pins.push_back(pin);
     }
   }
   delete pin_iter;
 
-  return {locs, loc_map};
+  return {locs, pins};
 }
 
 stt::Tree UvDRCSlewBuffer::MakeSteinerTree(const sta::Pin* drvr_pin,
                                            LocVec& locs,
-                                           LocMap& loc_map)
+                                           PinVec& pins)
 {
   if (locs.size() < 2) {
     throw std::runtime_error(
@@ -97,7 +133,6 @@ stt::Tree UvDRCSlewBuffer::MakeSteinerTree(const sta::Pin* drvr_pin,
 
   std::vector<int> x;
   std::vector<int> y;
-  std::size_t drvr_idx = 0;
 
   bool is_placed = true;
   auto db_network = resizer_->getDbNetwork();
@@ -106,12 +141,7 @@ stt::Tree UvDRCSlewBuffer::MakeSteinerTree(const sta::Pin* drvr_pin,
     const odb::Point& loc = locs[i];
     x.push_back(loc.x());
     y.push_back(loc.y());
-    auto pin = loc_map[loc];
-    if (pin == drvr_pin) {
-      drvr_idx = i;
-    }
-
-    is_placed &= db_network->isPlaced(pin);
+    is_placed &= db_network->isPlaced(pins[i]);
   }
 
   if (!is_placed) {
@@ -120,67 +150,55 @@ stt::Tree UvDRCSlewBuffer::MakeSteinerTree(const sta::Pin* drvr_pin,
   }
 
   return resizer_->getSteinerTreeBuilder()->makeSteinerTree(
-      db_network->findFlatDbNet(drvr_pin), x, y, drvr_idx);
+      db_network->findFlatDbNet(drvr_pin), x, y, 0);
 }
 
 // From SteinerTree to RCTree structure
 RCTreeNodePtr UvDRCSlewBuffer::BuildRCTree(const sta::Pin* drvr_pin,
                                            stt::Tree& tree,
                                            LocVec& locs,
-                                           LocMap& loc_map)
+                                           PinVec& pins)
 {
-  // TODO: There can be sinks at same location, need to handle that case
+  std::size_t pin_count = static_cast<std::size_t>(tree.deg);
+  std::vector<RCTreeNodePtr> pin_nodes{};
+  pin_nodes.push_back(
+      std::make_shared<DrivNode>(locs[0], drvr_pin));  // Driver node
+  for (std::size_t i = 1; i != pin_count; i++) {
+    pin_nodes.push_back(
+        std::make_shared<LoadNode>(locs[i], pins[i]));  // Driver node
+  }
   std::unordered_map<odb::Point, RCTreeNodePtr, LocHash, LocEqual>
-      loc_node_map{};
-  RCTreeNodePtr root = nullptr;
-  auto InitNode = [&](odb::Point loc) -> RCTreeNodePtr {
-    if (loc_node_map.find(loc) != loc_node_map.end()) {
-      return loc_node_map[loc];
-    }
+      junc_node_map{};
 
-    RCTreeNodePtr node = nullptr;
-    auto pin_iter = loc_map.find(loc);
-    if (pin_iter != loc_map.end()) {
-      const sta::Pin* pin = pin_iter->second;
-      if (pin == drvr_pin) {
-        node = std::make_shared<DrivNode>(loc, pin);
-        root = node;
-      } else {
-        node = std::make_shared<LoadNode>(loc, pin);
-      }
-    } else {
-      node = std::make_shared<JuncNode>(loc);
+  auto GetOrInitJuncNode = [&](odb::Point loc) -> RCTreeNodePtr {
+    auto itr = junc_node_map.find(loc);
+    if (itr == junc_node_map.end()) {
+      RCTreeNodePtr node = std::make_shared<JuncNode>(loc);
+      junc_node_map[loc] = node;
+      return node;
     }
-    loc_node_map[loc] = node;
-    return node;
+    return itr->second;
   };
 
-  // Init load, driv & junctions first
   for (std::size_t i = 0; i != tree.branchCount(); i++) {
     auto& branch = tree.branch[i];
-    odb::Point loc{branch.x, branch.y};
-    auto& ref_branch = tree.branch[branch.n];
-    odb::Point ref_loc{ref_branch.x, ref_branch.y};
-
-    auto node = InitNode(loc);
-    auto ref_node = InitNode(ref_loc);
-    if (ref_node == node) {
-      continue;  // stt tree may have duplicated steiner nodes
-    }
-    if (ref_node->Type() != RCTreeNodeType::JUNCTION) {
-      auto new_ref_node = std::make_shared<JuncNode>(ref_loc);
-      loc_node_map[ref_loc] = new_ref_node;
-      if (ref_node->Type() == RCTreeNodeType::DRIVER) {
-        ref_node->AddDownstreamNode(new_ref_node);
-      } else if (ref_node->Type() == RCTreeNodeType::LOAD) {
-        new_ref_node->AddDownstreamNode(ref_node);
+    auto node = GetOrInitJuncNode(odb::Point(branch.x, branch.y));
+    if (i < pin_count) {
+      if (i == 0) {
+        pin_nodes[i]->AddDownstreamNode(node);
+      } else {
+        node->AddDownstreamNode(pin_nodes[i]);
       }
-      ref_node = new_ref_node;
     }
-    ref_node->AddDownstreamNode(node);
+    if (i == 0) continue;
+    auto parent_branch = tree.branch[branch.n];
+    odb::Point parent_loc{parent_branch.x, parent_branch.y};
+    RCTreeNodePtr parent_node = GetOrInitJuncNode(parent_loc);
+    parent_node->AddDownstreamNode(node);
   }
 
-  return root;
+  pin_nodes[0]->DebugPrint(0, resizer_->logger());
+  return pin_nodes[0];
 }
 
 // TODO: IMPL
@@ -194,12 +212,15 @@ void UvDRCSlewBuffer::PrepareBufferSlots(RCTreeNodePtr root,
                MaxLengthForCap(buffer_candidates_.front().cell, corner)));
 
   auto buffer_step = max_wire_length / 2;
+  resizer_->logger()->report("Preparing buffer slots with buffer step: {}",
+                             buffer_step);
 
   // Prepare buffer slots per max_wire_length
   auto d_nodes = root->DownstreamNodes();
   for (auto& d : d_nodes) {
     PrepareBufferSlotsHelper(root, d, buffer_step);
   }
+  root->DebugPrint(0, resizer_->logger());
 }
 
 // TODO: IMPL
@@ -426,8 +447,11 @@ void UvDRCSlewBuffer::Run(const sta::Pin* drvr_pin,
   {
     auto [locs, loc_map] = InitNetConnections(drvr_pin);
     auto steiner_tree = MakeSteinerTree(drvr_pin, locs, loc_map);
-    // steiner_tree.printTree(resizer_->logger());
+
+    steiner_tree.printTree(resizer_->logger());
+
     auto rc_tree = BuildRCTree(drvr_pin, steiner_tree, locs, loc_map);
+
     PrepareBufferSlots(rc_tree, corner);
   }
 }

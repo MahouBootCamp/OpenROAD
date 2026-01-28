@@ -21,3 +21,5 @@ puts "Found [sta::max_slew_violation_count] violations"
 repair_design
 
 report_check_types -max_slew -max_cap -max_fanout -violators
+
+exit

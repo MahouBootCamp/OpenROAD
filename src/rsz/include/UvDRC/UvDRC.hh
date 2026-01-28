@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <db_sta/dbSta.hh>
 #include <memory>
+#include <ostream>
 #include <rsz/Resizer.hh>
 #include <sta/Delay.hh>
 #include <sta/Network.hh>
@@ -15,6 +16,7 @@
 #include <unordered_map>
 
 #include "sta/Corner.hh"
+#include "utl/Logger.h"
 
 namespace uv_drc {
 
@@ -33,9 +35,8 @@ class LocHash
   std::size_t HashCombine(std::size_t seed, std::size_t value) const;
 };
 
-using LocMap
-    = std::unordered_map<odb::Point, const sta::Pin*, LocHash, LocEqual>;
 using LocVec = std::vector<odb::Point>;
+using PinVec = std::vector<const sta::Pin*>;
 
 enum class UvDRCSlewModel
 {
@@ -64,6 +65,8 @@ class RCTreeNode
   virtual void AddDownstreamNode(RCTreeNodePtr ptr) = 0;
   virtual void RemoveDownstreamNode(RCTreeNodePtr ptr) = 0;
   virtual std::vector<RCTreeNodePtr> DownstreamNodes() = 0;
+
+  void DebugPrint(int indent, utl::Logger* logger);
 
  private:
   odb::Point loc_;
@@ -203,14 +206,14 @@ class UvDRCSlewBuffer
  private:
   void InitBufferCandidates();
 
-  std::tuple<LocVec, LocMap> InitNetConnections(const sta::Pin* drvr_pin);
+  std::tuple<LocVec, PinVec> InitNetConnections(const sta::Pin* drvr_pin);
   stt::Tree MakeSteinerTree(const sta::Pin* drvr_pin,
                             LocVec& locs,
-                            LocMap& loc_map);
+                            PinVec& pins);
   RCTreeNodePtr BuildRCTree(const sta::Pin* drvr_pin,
                             stt::Tree& tree,
                             LocVec& locs,
-                            LocMap& loc_map);
+                            PinVec& pins);
   void PrepareBufferSlots(RCTreeNodePtr root, const sta::Corner* corner);
   void PrepareBufferSlotsHelper(RCTreeNodePtr u,
                                 RCTreeNodePtr d,
