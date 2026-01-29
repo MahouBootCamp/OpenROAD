@@ -43,7 +43,7 @@ void RCTreeNode::DebugPrint(int indent, utl::Logger* logger)
   std::stringstream os;
   {
     std::string indent_str(indent, ' ');
-    os << "Node Type: " << indent_str;
+    os << indent_str << "Node Type: ";
   }
   switch (type_) {
     case RCTreeNodeType::LOAD:
@@ -266,11 +266,12 @@ void UvDRCSlewBuffer::PrepareBufferSlots(RCTreeNodePtr root,
 {
   auto max_wire_length = resizer_->metersToDbu(resizer_->findMaxWireLength());
   max_wire_length = std::min(
-      max_wire_length,
+      std::min(max_wire_length, user_max_wire_length_),
       std::min(MaxLengthForSlew(buffer_candidates_.front().cell, corner),
                MaxLengthForCap(buffer_candidates_.front().cell, corner)));
 
   auto buffer_step = max_wire_length / 2;
+
   resizer_->logger()->report("Preparing buffer slots with buffer step: {}",
                              buffer_step);
 
@@ -309,8 +310,8 @@ void UvDRCSlewBuffer::PrepareBufferSlotsHelper(RCTreeNodePtr u,
       }
       prevWireNode = wireNode;
     }
-    u->AddDownstreamNode(prevWireNode);
     u->RemoveDownstreamNode(d);
+    u->AddDownstreamNode(prevWireNode);
   }
 
   auto next_d_nodes = d->DownstreamNodes();

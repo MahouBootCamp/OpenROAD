@@ -125,7 +125,10 @@ class DrivNode : public RCTreeNode
     }
     downstream_ = nullptr;
   }
-  std::size_t DownstreamNodeCount() override { return downstream_ == nullptr ? 0 : 1; }
+  std::size_t DownstreamNodeCount() override
+  {
+    return downstream_ == nullptr ? 0 : 1;
+  }
 
  private:
   const sta::Pin* pin_;
@@ -156,7 +159,10 @@ class WireNode : public RCTreeNode
     }
     downstream_ = nullptr;
   }
-  std::size_t DownstreamNodeCount() override { return downstream_ == nullptr ? 0 : 1; }
+  std::size_t DownstreamNodeCount() override
+  {
+    return downstream_ == nullptr ? 0 : 1;
+  }
 
  private:
   RCTreeNodePtr downstream_;
@@ -232,6 +238,10 @@ class UvDRCSlewBuffer
  private:
   void TestFunction();
   void InitBufferCandidates();
+  void SetMaxWireLength(int max_length_dbu)
+  {
+    user_max_wire_length_ = max_length_dbu;
+  }
 
   std::tuple<LocVec, PinVec> InitNetConnections(const sta::Pin* drvr_pin);
   stt::Tree MakeSteinerTree(const sta::Pin* drvr_pin,
@@ -241,11 +251,10 @@ class UvDRCSlewBuffer
                             stt::Tree& tree,
                             LocVec& locs,
                             PinVec& pins);
-  RCTreeNodePtr BuildRCTreeHelper (
-    std::vector<RCTreeNodePtr>& nodes,
-    std::vector<std::vector<std::size_t>>& adjacents,
-    std::size_t current_index
-  );
+  RCTreeNodePtr BuildRCTreeHelper(
+      std::vector<RCTreeNodePtr>& nodes,
+      std::vector<std::vector<std::size_t>>& adjacents,
+      std::size_t current_index);
   void PrepareBufferSlots(RCTreeNodePtr root, const sta::Corner* corner);
   void PrepareBufferSlotsHelper(RCTreeNodePtr u,
                                 RCTreeNodePtr d,
@@ -268,6 +277,8 @@ class UvDRCSlewBuffer
 
   std::vector<BufferCandidate> buffer_candidates_;
   // RCTreeNodePtr root_ = nullptr;
+  // TODO: DELETE THIS
+  int user_max_wire_length_ = std::numeric_limits<int>::max();  // in DBU
 
   static constexpr float k_slew_margin_ = 0.2f;  // 20%
   static constexpr float k_cap_margin_ = 0.2f;   // 20%
