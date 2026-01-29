@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
-#include <queue>
 #include <sstream>
 #include <stdexcept>
 #include <tuple>

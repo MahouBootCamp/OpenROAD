@@ -7,13 +7,11 @@
 #include <cstddef>
 #include <db_sta/dbSta.hh>
 #include <memory>
-#include <ostream>
 #include <rsz/Resizer.hh>
 #include <sta/Delay.hh>
 #include <sta/Network.hh>
 #include <sta/Path.hh>
 #include <stdexcept>
-#include <unordered_map>
 
 #include "sta/Corner.hh"
 #include "utl/Logger.h"
