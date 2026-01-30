@@ -383,7 +383,6 @@ void UvDRCSlewBuffer::PrepareBufferSlotsHelper(RCTreeNodePtr u,
   auto u_loc = u->Location();
   auto d_loc = d->Location();
   auto distance = odb::Point::manhattanDistance(u_loc, d_loc);
-  RCTreeNodePtr prevWireNode = nullptr;
   if (distance > buffer_step) {
     // TODO: insert wire nodes
     // NOTE: here we divide the wire into segments of same length,
@@ -391,7 +390,7 @@ void UvDRCSlewBuffer::PrepareBufferSlotsHelper(RCTreeNodePtr u,
     int n = distance / buffer_step;
     int delta_x = (u_loc.x() - d_loc.x()) / n;
     int delta_y = (u_loc.y() - d_loc.y()) / n;
-    
+    RCTreeNodePtr prevWireNode = nullptr;
     for (int i = 1; i <= n; i++) {
       odb::Point wire_node_loc{d_loc.x() + i * delta_x,
                                d_loc.y() + i * delta_y};
@@ -403,16 +402,14 @@ void UvDRCSlewBuffer::PrepareBufferSlotsHelper(RCTreeNodePtr u,
       }
       prevWireNode = wireNode;
     }
-  }
-  // Buffer slot at junctions' outputs
-  if (u->Type() == RCTreeNodeType::JUNCTION && distance > 0) {
-    RCTreeNodePtr wireNode = std::make_shared<WireNode>(u_loc);
-    wireNode->AddDownstreamNode(prevWireNode != nullptr ? prevWireNode : d);
-    prevWireNode = wireNode; 
-  }
-  if (prevWireNode != nullptr) {
     u->RemoveDownstreamNode(d);
     u->AddDownstreamNode(prevWireNode);
+  } else if (u->Type() == RCTreeNodeType::JUNCTION
+             && distance > 0) {  // We still need a Buffer slot at junctions' outputs
+    RCTreeNodePtr wireNode = std::make_shared<WireNode>(u_loc);
+    wireNode->AddDownstreamNode(d);
+    u->RemoveDownstreamNode(d);
+    u->AddDownstreamNode(wireNode);
   }
 
   auto next_d_nodes = d->DownstreamNodes();
