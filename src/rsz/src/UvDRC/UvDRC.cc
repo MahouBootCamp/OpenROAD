@@ -1,6 +1,7 @@
 #include "UvDRC/UvDRC.hh"
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <memory>
 #include <sstream>
@@ -9,9 +10,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "db_sta/dbSta.hh"
 #include "odb/db.h"
 #include "odb/geom.h"
 #include "sta/MinMax.hh"
+#include "sta/PortDirection.hh"
 #include "stt/SteinerTreeBuilder.h"
 #include "utl/Logger.h"
 
@@ -37,12 +40,18 @@ std::size_t LocHash::HashCombine(std::size_t seed, std::size_t value) const
   return seed ^ (value + 0x9e3779b9 + (seed << 6) + (seed >> 2));
 }
 
+void RCTreeNode::DebugPrint(utl::Logger* logger)
+{
+  logger->report("RCTreeNode DebugPrint:");
+  DebugPrint(0, logger);
+}
+
 void RCTreeNode::DebugPrint(int indent, utl::Logger* logger)
 {
   std::stringstream os;
   {
     std::string indent_str(indent, ' ');
-    os << indent_str << "Node Type: ";
+    os << indent_str;
   }
   switch (type_) {
     case RCTreeNodeType::LOAD:
@@ -61,7 +70,7 @@ void RCTreeNode::DebugPrint(int indent, utl::Logger* logger)
       os << "NONE";
       break;
   }
-  os << ", Location: (" << loc_.x() << ", " << loc_.y() << ")";
+  os << ", (" << loc_.x() << ", " << loc_.y() << ")";
   logger->report(os.str());
   auto d_nodes = DownstreamNodes();
   for (const auto& d : d_nodes) {
@@ -69,9 +78,78 @@ void RCTreeNode::DebugPrint(int indent, utl::Logger* logger)
   }
 }
 
+void LoadNode::CalcBufferSolutions(const sta::Corner* corner,
+                                   double unit_r,
+                                   double unit_c,
+                                   int max_cap,
+                                   rsz::Resizer* resizer,
+                                   sta::dbSta* sta,
+                                   BufferCandidates& buffer_candidates)
+{
+  auto cap = SinkInCap(resizer);
+  auto limit = SlewLimit(sta, resizer, corner);
+  assert(cap > 0);
+  assert(limit > 0);
+  if (cap <= max_cap) {
+    BufferSolutionPtr solution
+        = std::make_shared<BufferSolution>(false, cap, 0.0, 0, limit);
+    buffer_solutions_.push_back(solution);
+  } else {
+    for (auto& buffer_cand : buffer_candidates) {
+      if (buffer_cand.load_cap_limit >= cap) {
+        // TODO: we do not have a weight for different buffer sizes in this demo
+        BufferSolutionPtr solution = std::make_shared<BufferSolution>(
+            true, buffer_cand.input_cap, 0.0, 1, buffer_cand.input_slew_limit);
+        buffer_solutions_.push_back(solution);
+        break;
+      }
+    }
+  }
+}
+
+float LoadNode::SlewLimit(sta::dbSta* sta,
+                          rsz::Resizer* resizer,
+                          const sta::Corner* corner)
+{
+  const sta::Corner* corner1;
+  const sta::RiseFall* tr1;
+  sta::Slew slew1;
+  float limit1, slack1;
+  sta->checkSlew(pin_,
+                 corner,
+                 sta::MinMax::max(),
+                 false,
+                 corner1,
+                 tr1,
+                 slew1,
+                 limit1,
+                 slack1);
+
+  if (!corner1) {
+    // Fixup for nangate45: see comment in maxInputSlew
+    sta::LibertyPort* port = resizer->network()->libertyPort(pin_);
+    if (port) {
+      bool exists;
+      port->libertyLibrary()->defaultMaxSlew(limit1, exists);
+      if (exists) {
+        return limit1;
+      }
+    }
+  }
+  return limit1;
+}
+
+float LoadNode::SinkInCap(rsz::Resizer* resizer)
+{
+  sta::LibertyPort* port = resizer->network()->libertyPort(pin_);
+  return port->capacitance();
+}
+
 void UvDRCSlewBuffer::InitBufferCandidates()
 {
-  if (!buffer_candidates_.empty()) {
+  // TODO: In this demo, we only use the default slew/cap metrics from liberty file, without considering its performance on given corner.
+
+  if (!buffer_candidates_.empty()) { // init done
     return;
   }
 
@@ -79,8 +157,23 @@ void UvDRCSlewBuffer::InitBufferCandidates()
     sta::LibertyPort *in, *out;
     b->bufferPorts(in, out);
     float drive_resistance = out->driveResistance();
+
     float input_cap = in->capacitance();
-    BufferCandidate candidate{b, input_cap, drive_resistance};
+    
+    bool exists;
+
+    float in_slew_limit = sta::INF;
+    in->libertyLibrary()->defaultMaxSlew(in_slew_limit, exists);
+    assert(in_slew_limit != sta::INF);
+
+    float load_cap_limit;
+    out->libertyLibrary()->defaultMaxCapacitance(load_cap_limit, exists);
+    if (!exists) {
+      load_cap_limit = sta::INF;
+    }
+
+    BufferCandidate candidate{
+        b, input_cap, drive_resistance, in_slew_limit, load_cap_limit};
     buffer_candidates_.push_back(candidate);
   }
   // Sort by input capacitance ascendingly
@@ -192,7 +285,7 @@ RCTreeNodePtr UvDRCSlewBuffer::BuildRCTree(const sta::Pin* drvr_pin,
   }
 
   BuildRCTreeHelper(nodes, adjacents, 0);
-  root->DebugPrint(0, resizer_->logger());
+  // root->DebugPrint(resizer_->logger());
   return root;
 }
 
@@ -279,7 +372,7 @@ void UvDRCSlewBuffer::PrepareBufferSlots(RCTreeNodePtr root,
   for (auto& d : d_nodes) {
     PrepareBufferSlotsHelper(root, d, buffer_step);
   }
-  root->DebugPrint(0, resizer_->logger());
+  // root->DebugPrint(resizer_->logger());
 }
 
 // TODO: IMPL
@@ -359,7 +452,8 @@ int UvDRCSlewBuffer::MaxLengthForSlewOpenROAD(sta::LibertyCell* buffer_cell,
   if (max_slew == sta::INF) {
     return std::numeric_limits<int>::max();
   }
-  max_slew *= (1 - k_slew_margin_);  // * 0.8
+  static constexpr float k_slew_margin = 0.2f;  // 20%
+  max_slew *= (1 - k_slew_margin);  // * 0.8
 
   double unit_r, unit_c;
   resizer_->estimate_parasitics_->wireSignalRC(corner, unit_r, unit_c);
@@ -429,15 +523,25 @@ int UvDRCSlewBuffer::MaxLengthForCap(sta::LibertyCell* buffer_cell,
   float cap_limit;
   out->capacitanceLimit(sta::MinMax::max(), cap_limit, cap_limit_exists);
 
+  static constexpr float k_cap_margin = 0.2f;   // 20%
   if (cap_limit_exists) {
     double wire_res, wire_cap;
     resizer_->estimate_parasitics_->wireSignalRC(corner, wire_res, wire_cap);
     double max_length
-        = (cap_limit * (1 - k_cap_margin_) - in->capacitance()) / wire_cap;
+        = (cap_limit * (1 - k_cap_margin) - in->capacitance()) / wire_cap;
     return std::max(0, resizer_->metersToDbu(max_length));
   }
 
   return std::numeric_limits<int>::max();
+}
+
+void CalculateBufferSolutions(RCTreeNodePtr node,
+                              double unit_r,
+                              double unit_c,
+                              int max_cap)
+{
+  if (node->Type() == RCTreeNodeType::LOAD) {
+  }
 }
 
 void UvDRCSlewBuffer::Run(const sta::Pin* drvr_pin,
@@ -448,17 +552,45 @@ void UvDRCSlewBuffer::Run(const sta::Pin* drvr_pin,
   TestFunction();
 
   InitBufferCandidates();
-
+  RCTreeNodePtr root = nullptr;
   {
     auto [locs, loc_map] = InitNetConnections(drvr_pin);
     auto steiner_tree = MakeSteinerTree(drvr_pin, locs, loc_map);
 
     steiner_tree.printTree(resizer_->logger());
 
-    auto rc_tree = BuildRCTree(drvr_pin, steiner_tree, locs, loc_map);
+    root = BuildRCTree(drvr_pin, steiner_tree, locs, loc_map);
 
-    PrepareBufferSlots(rc_tree, corner);
+    PrepareBufferSlots(root, corner);
+
+    root->DebugPrint(resizer_->logger());
   }
+
+  double unit_r, unit_c;
+  resizer_->estimate_parasitics_->wireSignalRC(corner, unit_r, unit_c);
+  root->CalcBufferSolutions(corner,
+                            unit_r,
+                            unit_c,
+                            max_cap,
+                            resizer_,
+                            resizer_->sta_,
+                            buffer_candidates_);
+  
+  auto& solutions = root->BufferSolutions();
+  if (solutions.empty()) {
+    throw std::runtime_error("No buffer solutions found for the root node.");
+  }
+  std::sort(solutions.begin(),
+            solutions.end(),
+            [](const BufferSolutionPtr& a, const BufferSolutionPtr& b) {
+              return a->area < b->area;
+            });
+  auto& best_solution = solutions.front();
+  resizer_->logger()->report(
+      "Best buffer solution for the root node: area = {}",
+      best_solution->area);
+  
+  // TODO: Apply the best buffer solution to the netlist
 }
 
 void UvDRCSlewBuffer::TestFunction()

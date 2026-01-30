@@ -12,6 +12,7 @@
 #include <sta/Network.hh>
 #include <sta/Path.hh>
 #include <stdexcept>
+#include <vector>
 
 #include "sta/Corner.hh"
 #include "utl/Logger.h"
@@ -42,8 +43,31 @@ enum class UvDRCSlewModel
   OpenROAD
 };
 
+struct BufferCandidate
+{
+  sta::LibertyCell* cell;
+  float input_cap;
+  float drive_resistance;
+  float input_slew_limit;
+  float load_cap_limit;
+};
+using BufferCandidates = std::vector<BufferCandidate>;
+
+struct BufferSolution;
+using BufferSolutionPtr = std::shared_ptr<BufferSolution>;
 class RCTreeNode;
 using RCTreeNodePtr = std::shared_ptr<RCTreeNode>;
+
+struct BufferSolution
+{
+  bool is_buffered;
+  float cap;
+  float wire_slew;
+  std::size_t area;  // buffer_count
+  float limit;
+  std::vector<BufferSolutionPtr> children;
+};
+
 enum class RCTreeNodeType
 {
   LOAD,
@@ -60,16 +84,33 @@ class RCTreeNode
   virtual ~RCTreeNode() = default;
   RCTreeNodeType Type() { return type_; }
   odb::Point Location() const { return loc_; }
+  virtual const sta::Pin* pin() const { return nullptr; }
   virtual void AddDownstreamNode(RCTreeNodePtr ptr) = 0;
   virtual void RemoveDownstreamNode(RCTreeNodePtr ptr) = 0;
   virtual std::vector<RCTreeNodePtr> DownstreamNodes() = 0;
   virtual std::size_t DownstreamNodeCount() = 0;
+  std::vector<BufferSolutionPtr>& BufferSolutions()
+  {
+    return buffer_solutions_;
+  }
+  virtual void CalcBufferSolutions(const sta::Corner* corner,
+                                   double unit_r,
+                                   double unit_c,
+                                   int max_cap,
+                                   rsz::Resizer* resizer,
+                                   sta::dbSta* sta,
+                                   BufferCandidates& buffer_candidate)
+      = 0;
 
+  void DebugPrint(utl::Logger* logger);
+
+ protected:
   void DebugPrint(int indent, utl::Logger* logger);
 
- private:
+ protected:
   odb::Point loc_;
   RCTreeNodeType type_;
+  std::vector<BufferSolutionPtr> buffer_solutions_;
 };
 
 class LoadNode : public RCTreeNode
@@ -90,8 +131,21 @@ class LoadNode : public RCTreeNode
   }
   std::vector<RCTreeNodePtr> DownstreamNodes() override { return {}; }
   std::size_t DownstreamNodeCount() override { return 0; }
+  void CalcBufferSolutions(const sta::Corner* corner,
+                           double unit_r,
+                           double unit_c,
+                           int max_cap,
+                           rsz::Resizer* resizer,
+                           sta::dbSta* sta,
+                           BufferCandidates& buffer_candidates) override;
 
- private:
+ protected:
+  float SlewLimit(sta::dbSta* sta,
+                  rsz::Resizer* resizer,
+                  const sta::Corner* corner);
+  float SinkInCap(rsz::Resizer* resizer);
+
+ protected:
   const sta::Pin* pin_;
 };
 
@@ -127,6 +181,15 @@ class DrivNode : public RCTreeNode
   {
     return downstream_ == nullptr ? 0 : 1;
   }
+  void CalcBufferSolutions(const sta::Corner* corner,
+                           double unit_r,
+                           double unit_c,
+                           int max_cap,
+                           rsz::Resizer* resizer,
+                           sta::dbSta* sta,
+                           BufferCandidates& buffer_candidates) override
+  { /* TODO: IMPL */
+  }
 
  private:
   const sta::Pin* pin_;
@@ -160,6 +223,15 @@ class WireNode : public RCTreeNode
   std::size_t DownstreamNodeCount() override
   {
     return downstream_ == nullptr ? 0 : 1;
+  }
+  void CalcBufferSolutions(const sta::Corner* corner,
+                           double unit_r,
+                           double unit_c,
+                           int max_cap,
+                           rsz::Resizer* resizer,
+                           sta::dbSta* sta,
+                           BufferCandidates& buffer_candidates) override
+  { /* TODO: IMPL */
   }
 
  private:
@@ -207,6 +279,15 @@ class JuncNode : public RCTreeNode
     }
     return count;
   }
+  void CalcBufferSolutions(const sta::Corner* corner,
+                           double unit_r,
+                           double unit_c,
+                           int max_cap,
+                           rsz::Resizer* resizer,
+                           sta::dbSta* sta,
+                           BufferCandidates& buffer_candidates) override
+  { /* TODO: IMPL */
+  }
 
  private:
   RCTreeNodePtr downstream1_;
@@ -224,14 +305,6 @@ class UvDRCSlewBuffer
   }
   ~UvDRCSlewBuffer() = default;
   void Run(const sta::Pin* drvr_pin, const sta::Corner* corner, int max_cap);
-
- private:
-  struct BufferCandidate
-  {
-    sta::LibertyCell* cell;
-    float input_cap;
-    float drive_resistance;
-  };
 
  private:
   void TestFunction();
@@ -258,6 +331,11 @@ class UvDRCSlewBuffer
                                 RCTreeNodePtr d,
                                 int buffer_step);
 
+  void CalculateBufferSolutions(RCTreeNodePtr node,
+                                double unit_r,
+                                double unit_c,
+                                int max_cap);
+
   int MaxLengthForSlew(sta::LibertyCell* buffer_cell,
                        const sta::Corner* corner);
   int MaxLengthForSlewAlpert(sta::LibertyCell* buffer_cell,
@@ -273,13 +351,14 @@ class UvDRCSlewBuffer
   // int max_cap_;
   UvDRCSlewModel model_;
 
-  std::vector<BufferCandidate> buffer_candidates_;
+  BufferCandidates buffer_candidates_;
   // RCTreeNodePtr root_ = nullptr;
   // TODO: DELETE THIS
   int user_max_wire_length_ = std::numeric_limits<int>::max();  // in DBU
 
-  static constexpr float k_slew_margin_ = 0.2f;  // 20%
-  static constexpr float k_cap_margin_ = 0.2f;   // 20%
+  float slew_margin_ = 0.0;
+  float cap_margin_ = 0.0;
+
   static constexpr float k_openroad_slew_factor = 1.39;
 };
 
